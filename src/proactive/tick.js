@@ -9,6 +9,7 @@ import { runGeneration } from '../ai/aiCaller.js';
 import { dispatchPush } from '../push/pushSender.js';
 import { nowMs } from '../util/ids.js';
 import { renderTimeTokens } from '../util/timeTokens.js';
+import { buildMemoryContext } from './mcpContext.js';
 
 // 把滑窗消息渲染成转录文本（喂进 promptTemplate 的 {{RECENT_MESSAGES}}）
 function renderTranscript(recentMessages) {
@@ -21,10 +22,11 @@ function renderTranscript(recentMessages) {
 }
 
 // 占位替换：后端唯一接触 prompt 的地方，只做字符串替换，无任何话术。
-function fillTemplate(template, { transcript, reason }) {
+function fillTemplate(template, { transcript, reason, memory }) {
     return String(template || '')
         .replaceAll('{{RECENT_MESSAGES}}', transcript)
-        .replaceAll('{{IMPULSE_REASON}}', reason || '');
+        .replaceAll('{{IMPULSE_REASON}}', reason || '')
+        .replaceAll('{{MEMORY_CONTEXT}}', memory || '');
 }
 
 export async function runProactiveTick(env) {
@@ -82,9 +84,20 @@ export async function runProactiveTick(env) {
 
             // 命中 → 实时生成。messages 只有一条 system（手机端拼好的完整 prompt + 填充滑窗）
             const transcript = renderTranscript(rec.recentMessages);
-            // 先填即时真时间哨兵（§NOW_*§），再填滑窗/理由占位符。
+            // 🧠 直连第三方记忆 MCP 检索（关软件也能用最新记忆）；失败/无配置 → 空串不阻断生成。
+            let memory = '';
+            try {
+                memory = await buildMemoryContext(
+                    rec.mcpContextServers,
+                    rec.recentMessages,
+                    { userId: rec.userId, characterId: rec.charId }
+                );
+            } catch (e) {
+                console.warn('[proactive] memory context failed:', e?.message);
+            }
+            // 先填即时真时间哨兵（§NOW_*§），再填滑窗/理由/记忆占位符。
             const timedTemplate = renderTimeTokens(rec.promptTemplate, rec.timeSpec, now);
-            const systemContent = fillTemplate(timedTemplate, { transcript, reason: verdict.reason });
+            const systemContent = fillTemplate(timedTemplate, { transcript, reason: verdict.reason, memory });
             const messages = [{ role: 'system', content: systemContent }];
 
             let content = null, error = null;

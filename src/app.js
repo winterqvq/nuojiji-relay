@@ -199,7 +199,7 @@ export function createApp() {
             inboxId, userId, charId, promptTemplate, proactiveProfile, lifeState,
             intensity, proactiveBias, recentMessages, aiSettings, quietHours,
             charUtcOffsetSeconds, proactiveEnabledAt, lastInteractionAt, enabled,
-            mode, interval, intervalUnit, probability, timeSpec,
+            mode, interval, intervalUnit, probability, timeSpec, mcpContextServers,
         } = body || {};
         if (!inboxId || userId == null || charId == null || !promptTemplate || !aiSettings) {
             return c.json({ error: 'inboxId / userId / charId / promptTemplate / aiSettings required' }, 400);
@@ -218,6 +218,7 @@ export function createApp() {
             lastInteractionAt: lastInteractionAt || 0,
             enabled: enabled !== false,
             timeSpec: timeSpec || null, // 🕒 时间穿透：tick 时用它把 §NOW_*§ 哨兵填成即时真时间
+            mcpContextServers: Array.isArray(mcpContextServers) ? mcpContextServers : [], // 🧠 第三方记忆 MCP 直连配置
         });
         return c.json({ ok: true });
     });
