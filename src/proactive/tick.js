@@ -163,7 +163,10 @@ export async function runProactiveTick(env) {
                 const subs = await sub.list(rec.inboxId);
                 if (subs.length) {
                     const title = rec.timeSpec?.charName || '糯叽机';
-                    const bodies = error ? ['有新消息，点开查看'] : extractPushBodies(content);
+                    // 🔒 通知隐私模式：正文换「你有一条新消息」，标题(角色名)/头像保留。仍逐气泡发以保持节奏一致。
+                    const bodies = rec.notifPrivacy
+                        ? (error ? ['你有一条新消息'] : extractPushBodies(content).map(() => '你有一条新消息'))
+                        : (error ? ['有新消息，点开查看'] : extractPushBodies(content));
                     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
                     let i = 0;
                     for (const body of bodies) {

@@ -137,9 +137,10 @@ export function createApp() {
                 const subs = await sub.list(inboxId);
                 if (!subs.length) return;
                 const title = meta?.charName || '糯叽机';
-                const bodies = item.error
-                    ? ['生成失败，点开查看']
-                    : extractPushBodies(item.content);
+                // 🔒 通知隐私模式（手机端 meta 带来）：正文换「你有一条新消息」，标题/头像保留。
+                const bodies = meta?.notifPrivacy
+                    ? (item.error ? ['你有一条新消息'] : extractPushBodies(item.content).map(() => '你有一条新消息'))
+                    : (item.error ? ['生成失败，点开查看'] : extractPushBodies(item.content));
                 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
                 let i = 0;
                 for (const body of bodies) {
@@ -326,7 +327,7 @@ export function createApp() {
             inboxId, userId, charId, promptTemplate, proactiveProfile, lifeState,
             intensity, proactiveBias, recentMessages, aiSettings, quietHours,
             charUtcOffsetSeconds, proactiveEnabledAt, lastInteractionAt, enabled,
-            mode, interval, intervalUnit, probability, timeSpec, mcpContextServers, avatarUrl,
+            mode, interval, intervalUnit, probability, timeSpec, mcpContextServers, avatarUrl, notifPrivacy,
         } = body || {};
         if (!inboxId || userId == null || charId == null || !promptTemplate || !aiSettings) {
             return c.json({ error: 'inboxId / userId / charId / promptTemplate / aiSettings required' }, 400);
@@ -347,8 +348,24 @@ export function createApp() {
             timeSpec: timeSpec || null, // 🕒 时间穿透：tick 时用它把 §NOW_*§ 哨兵填成即时真时间
             mcpContextServers: Array.isArray(mcpContextServers) ? mcpContextServers : [], // 🧠 第三方记忆 MCP 直连配置
             avatarUrl: typeof avatarUrl === 'string' ? avatarUrl : null, // 🖼️ 角色头像公开 URL，推送时带给 iOS 通知扩展显示在左侧
+            notifPrivacy: !!notifPrivacy, // 🔒 通知隐私模式：推送时正文换「你有一条新消息」，标题/头像保留
         });
         return c.json({ ok: true });
+    });
+
+    // 🔒 即时刷新本 inbox 所有 pair 的通知隐私标志（用户切开关时调，无需重跑整个注册）。
+    app.post('/proactive/privacy', async (c) => {
+        let body;
+        try { body = await c.req.json(); } catch { return c.json({ error: 'invalid json' }, 400); }
+        const { inboxId, notifPrivacy } = body || {};
+        if (!inboxId) return c.json({ error: 'inboxId required' }, 400);
+        const { proactive } = await getStores(c.env);
+        const recs = (proactive?.listByInbox ? await proactive.listByInbox(inboxId) : []) || [];
+        let updated = 0;
+        for (const r of recs) {
+            if (await proactive.patch(inboxId, String(r.userId), String(r.charId), { notifPrivacy: !!notifPrivacy })) updated++;
+        }
+        return c.json({ ok: true, updated });
     });
 
     // 增量同步滑窗消息 + lifeState + lastInteractionAt（整窗替换，无 delta）
