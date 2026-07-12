@@ -15,6 +15,7 @@ import { requireSecret } from './util/auth.js';
 import { createOutboxStore } from './store/outboxStore.js';
 import { createSubStore, subKey } from './store/subStore.js';
 import { createProactiveStore, PROACTIVE_WINDOW_CAP } from './store/proactiveStore.js';
+import { createKvStore } from './store/kvStore.js';
 import { runGeneration } from './ai/aiCaller.js';
 import { dispatchPush } from './push/pushSender.js';
 import { getVapidPublicKey } from './push/webPush.js';
@@ -34,7 +35,7 @@ export function createApp() {
     }));
 
     // 每个请求懒初始化 store（Workers 每次 fetch 都新 env；Node 进程级缓存见下）
-    const stores = { outbox: null, sub: null, proactive: null };
+    const stores = { outbox: null, sub: null, proactive: null, kv: null };
     async function getStores(env) {
         if (env && env.OUTBOX) {
             // Workers：KV 绑定每次都现取，store 实例无状态可重建
@@ -42,12 +43,14 @@ export function createApp() {
                 outbox: await createOutboxStore(env),
                 sub: await createSubStore(env),
                 proactive: await createProactiveStore(env),
+                kv: await createKvStore(env),
             };
         }
         // Node：进程级单例
         if (!stores.outbox) stores.outbox = await createOutboxStore(env);
         if (!stores.sub) stores.sub = await createSubStore(env);
         if (!stores.proactive) stores.proactive = await createProactiveStore(env);
+        if (!stores.kv) stores.kv = await createKvStore(env);
         return stores;
     }
 
@@ -62,7 +65,7 @@ export function createApp() {
     app.get('/avatar/:key', async (c) => {
         const key = c.req.param('key');
         if (!key || !/^[\w.-]{1,128}$/.test(key)) return c.json({ error: 'bad key' }, 400);
-        const kv = c.env?.OUTBOX;
+        const { kv } = await getStores(c.env);
         if (!kv) return c.json({ error: 'no store' }, 503);
         const rec = await kv.get(`av:${key}`, { type: 'json' }).catch(() => null);
         if (!rec || !rec.b64) return c.json({ error: 'not found' }, 404);
@@ -260,9 +263,8 @@ export function createApp() {
         // 🔬 头像链路诊断：查这个 inbox 注册过的 pair 里有没有存 avatarUrl，
         //    以及该 URL 指向的头像在 KV 里是否真的存在（避免「上传失败/过期」却不自知）。
         try {
-            const { proactive } = await getStores(c.env);
+            const { proactive, kv } = await getStores(c.env);
             const recs = (proactive?.listByInbox ? await proactive.listByInbox(inboxId) : []) || [];
-            const kv = c.env?.OUTBOX;
             result.avatars = [];
             for (const r of recs) {
                 const url = r?.avatarUrl || null;
@@ -310,7 +312,7 @@ export function createApp() {
         const mime = m[1], b64 = m[2];
         // 限大小：通知头像几十 KB 足够，封顶 ~512KB base64 防滥用 KV。
         if (b64.length > 512 * 1024) return c.json({ error: 'avatar too large' }, 413);
-        const kv = c.env?.OUTBOX;
+        const { kv } = await getStores(c.env);
         if (!kv) return c.json({ error: 'no store' }, 503);
         try {
             await kv.put(`av:${key}`, JSON.stringify({ mime, b64 }), { expirationTtl: 60 * 60 * 24 * 60 }); // 60 天
